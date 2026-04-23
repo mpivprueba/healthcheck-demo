@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useAuth } from './context/AuthContext'
+import { Auth } from './components/Auth'
 import {
   Bar,
   BarChart,
@@ -1357,6 +1359,7 @@ function hasMeaningfulSelection(response: string | string[] | undefined) {
 }
 
 function App() {
+  const { user, loading } = useAuth()
   const [role, setRole] = useState<UserRole>('customer')
   const [screen, setScreen] = useState<ScreenKey>('dashboard')
   const [activeDomainId, setActiveDomainId] = useState('d1')
@@ -1490,6 +1493,14 @@ function App() {
       setScreen('dashboard')
     }
   }, [role, screen])
+
+  if (loading) return (
+    <div className="min-h-screen flex items-center justify-center bg-gray-950">
+      <p className="text-white">Cargando...</p>
+    </div>
+  )
+
+  if (!user) return <Auth />
 
   const openDomain = (domainId: string) => {
     setActiveDomainId(domainId)
