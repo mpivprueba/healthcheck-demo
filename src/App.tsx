@@ -17,6 +17,12 @@ import {
 } from 'recharts'
 import { meridianData } from './data/meridianData'
 import type { UserRole } from './types'
+import { TenableConnect } from './components/TenableConnect'
+
+export interface TenableCredentials {
+  accessKey: string
+  secretKey: string
+}
 
 type ScreenKey =
   | 'dashboard'
@@ -1357,6 +1363,7 @@ function hasMeaningfulSelection(response: string | string[] | undefined) {
 }
 
 function App() {
+  const [tenableCredentials, setTenableCredentials] = useState<TenableCredentials | null>(null)
   const [role, setRole] = useState<UserRole>('customer')
   const [screen, setScreen] = useState<ScreenKey>('dashboard')
   const [activeDomainId, setActiveDomainId] = useState('d1')
@@ -1540,6 +1547,10 @@ function App() {
     setScreen('questionnaire')
   }
 
+  if (tenableCredentials === null) {
+    return <TenableConnect onConnect={(creds) => setTenableCredentials(creds)} />
+  }
+
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900">
       <header className="border-b border-slate-200 bg-white shadow-sm">
@@ -1647,6 +1658,24 @@ function App() {
                 text="Switch between Customer View and Consultant View. Customer View shows the assessment with Consultant Value Indicators. Consultant View reveals the Interview Guide, Engagement workspace, and Expansion Opportunities. Advanced Analysis content appears read-only in Customer View and editable in Consultant View."
               />
             </div>
+
+            <button
+              type="button"
+              onClick={() => setTenableCredentials(null)}
+              className="rounded px-3 py-1.5 text-xs font-medium transition-all"
+              style={{ color: '#7B9DBF', border: '1px solid #1B3A5C' }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.color = '#ffffff'
+                e.currentTarget.style.backgroundColor = '#1B3A5C'
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.color = '#7B9DBF'
+                e.currentTarget.style.backgroundColor = 'transparent'
+              }}
+              title="Cerrar sesión de Tenable"
+            >
+              Desconectar
+            </button>
           </div>
 
           <nav className="mt-4 flex flex-nowrap gap-2 overflow-x-auto pb-1">
