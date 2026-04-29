@@ -16,7 +16,6 @@ function json(body: unknown, status = 200): Response {
 }
 
 Deno.serve(async (req) => {
-  // Handle CORS preflight
   if (req.method === 'OPTIONS') {
     return new Response(null, { status: 204, headers: CORS_HEADERS })
   }
@@ -25,13 +24,20 @@ Deno.serve(async (req) => {
     return json({ error: 'Method not allowed. Use POST.' }, 405)
   }
 
-  // Parse request body
+  // ---------------------------------------------------------------------------
+  // Parse and validate body
+  // ---------------------------------------------------------------------------
+
+  let accessKey: string
+  let secretKey: string
   let endpoint: string
   let method: string
   let body: unknown
 
   try {
     const payload = await req.json()
+    accessKey = payload.accessKey
+    secretKey = payload.secretKey
     endpoint = payload.endpoint
     method = (payload.method ?? 'GET').toUpperCase()
     body = payload.body ?? undefined
@@ -39,55 +45,91 @@ Deno.serve(async (req) => {
     return json({ error: 'Invalid JSON body.' }, 400)
   }
 
-  // Validate endpoint
+  // Credentials
+  if (!accessKey || typeof accessKey !== 'string' || accessKey.trim() === '') {
+    return json({ error: "Missing required parameter: 'accessKey'." }, 400)
+  }
+  if (!secretKey || typeof secretKey !== 'string' || secretKey.trim() === '') {
+    return json({ error: "Missing required parameter: 'secretKey'." }, 400)
+  }
+
+  // Endpoint — must be a relative path, no SSRF vectors
   if (!endpoint || typeof endpoint !== 'string') {
     return json({ error: "Missing required parameter: 'endpoint'." }, 400)
   }
   if (!endpoint.startsWith('/')) {
     return json({ error: "'endpoint' must start with '/' (e.g. \"/assets\")." }, 400)
   }
-  // Prevent SSRF — reject anything that tries to escape the path
   if (endpoint.includes('://') || endpoint.includes('..')) {
     return json({ error: 'Invalid endpoint.' }, 400)
   }
 
-  // Read Tenable credentials from environment
-  const accessKey = Deno.env.get('TENABLE_ACCESS_KEY')
-  const secretKey = Deno.env.get('TENABLE_SECRET_KEY')
-
-  if (!accessKey || !secretKey) {
-    console.error('Tenable API keys not configured in Edge Function secrets.')
-    return json({ error: 'Proxy not configured: missing API keys.' }, 500)
+  // Method allow-list
+  const ALLOWED_METHODS = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH']
+  if (!ALLOWED_METHODS.includes(method)) {
+    return json({ error: `Method '${method}' is not allowed.` }, 400)
   }
 
-  // Forward request to Tenable
+  // ---------------------------------------------------------------------------
+  // Forward to Tenable
+  // ---------------------------------------------------------------------------
+
   let tenableResponse: Response
   try {
     tenableResponse = await fetch(`${TENABLE_BASE_URL}${endpoint}`, {
       method,
       headers: {
-        'X-ApiKeys': `accessKey=${accessKey};secretKey=${secretKey}`,
+        'X-ApiKeys': `accessKey=${accessKey.trim()};secretKey=${secretKey.trim()}`,
         'Accept': 'application/json',
         'Content-Type': 'application/json',
       },
       body: body !== undefined ? JSON.stringify(body) : undefined,
     })
   } catch (err) {
-    console.error('Failed to reach Tenable:', err)
-    return json({ error: 'Could not connect to Tenable API.' }, 502)
+    console.error('Network error reaching Tenable:', err)
+    return json({ error: 'Could not connect to Tenable API. Check your network connectivity.' }, 502)
   }
 
+  // ---------------------------------------------------------------------------
   // Parse Tenable response
-  let responseData: unknown
+  // ---------------------------------------------------------------------------
+
   const contentType = tenableResponse.headers.get('content-type') ?? ''
+  let responseData: unknown
+
   if (contentType.includes('application/json')) {
     try {
       responseData = await tenableResponse.json()
     } catch {
-      responseData = { raw: await tenableResponse.text() }
+      responseData = { error: 'Tenable returned malformed JSON.', status: tenableResponse.status }
     }
   } else {
-    responseData = { raw: await tenableResponse.text() }
+    // Non-JSON response (e.g. 401 HTML page from Tenable)
+    const text = await tenableResponse.text()
+    responseData = tenableResponse.ok
+      ? { raw: text }
+      : { error: `Tenable returned an unexpected response (${tenableResponse.status}).`, raw: text }
+  }
+
+  // Translate common Tenable HTTP status codes into readable error messages
+  if (!tenableResponse.ok) {
+    const status = tenableResponse.status
+    const detail =
+      status === 401
+        ? 'Invalid credentials. Verify the Access Key and Secret Key.'
+        : status === 403
+          ? 'Access denied. The API keys do not have permission for this endpoint.'
+          : status === 404
+            ? 'Endpoint not found in the Tenable API.'
+            : status === 429
+              ? 'Rate limit exceeded. Wait a moment and try again.'
+              : status >= 500
+                ? 'Tenable API returned a server error. Try again later.'
+                : null
+
+    if (detail) {
+      return json({ error: detail, upstream: responseData }, status)
+    }
   }
 
   return json(responseData, tenableResponse.status)
