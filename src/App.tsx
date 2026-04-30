@@ -18,6 +18,7 @@ import {
 import { meridianData } from './data/meridianData'
 import type { UserRole } from './types'
 import { TenableConnect } from './components/TenableConnect'
+import { TenableTest } from './components/TenableTest'
 
 export interface TenableCredentials {
   accessKey: string
@@ -1550,6 +1551,9 @@ function App() {
   if (tenableCredentials === null) {
     return <TenableConnect onConnect={(creds) => setTenableCredentials(creds)} />
   }
+
+  // TODO: remove — temporary connection test
+  return <TenableTest credentials={tenableCredentials} />
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900">
