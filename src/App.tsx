@@ -15,10 +15,10 @@ import {
   XAxis,
   YAxis,
 } from 'recharts'
-import { meridianData } from './data/meridianData'
-import type { UserRole } from './types'
+import type { DemoData, Finding, UserRole } from './types'
 import { TenableConnect } from './components/TenableConnect'
-import { TenableTest } from './components/TenableTest'
+import { getAssets, getScans } from './lib/tenable'
+import { transformTenableData } from './lib/tenableTransformer'
 
 export interface TenableCredentials {
   accessKey: string
@@ -1365,6 +1365,9 @@ function hasMeaningfulSelection(response: string | string[] | undefined) {
 
 function App() {
   const [tenableCredentials, setTenableCredentials] = useState<TenableCredentials | null>(null)
+  const [clientData, setClientData] = useState<DemoData | null>(null)
+  const [dataLoading, setDataLoading] = useState(false)
+  const [dataError, setDataError] = useState<string | null>(null)
   const [role, setRole] = useState<UserRole>('customer')
   const [screen, setScreen] = useState<ScreenKey>('dashboard')
   const [activeDomainId, setActiveDomainId] = useState('d1')
@@ -1392,10 +1395,9 @@ function App() {
     useState<ObservationResponseMap>(defaultObservationResponses)
   const [closingResponses, setClosingResponses] =
     useState<ClosingResponseMap>(defaultClosingResponses)
-  const highestOverallScore = Math.max(
-    meridianData.overallScoreBaseline,
-    meridianData.overallScoreWithContext,
-  )
+  const highestOverallScore = clientData
+    ? Math.max(clientData.overallScoreBaseline, clientData.overallScoreWithContext)
+    : 3
   const highestOverallScoreColor = getScoreColor(highestOverallScore)
 
   const demoGuide: DemoGuideState = {
@@ -1482,10 +1484,10 @@ function App() {
 
   const criticalFindings = useMemo(
     () =>
-      [...meridianData.findings]
-        .sort((a, b) => a.score - b.score)
-        .slice(0, 5),
-    [],
+      clientData
+        ? [...clientData.findings].sort((a, b) => a.score - b.score).slice(0, 5)
+        : [],
+    [clientData],
   )
 
   useEffect(() => {
@@ -1506,9 +1508,9 @@ function App() {
   }
 
   const openFinding = (findingId: string, anchorId?: string) => {
-    const finding = meridianData.findings.find((item) => item.id === findingId)
+    const finding = clientData?.findings.find((item) => item.id === findingId)
     if (!finding) {
-      const questionnaireOnlyFinding = meridianData.questionnaireOnlyFindings.find(
+      const questionnaireOnlyFinding = clientData?.questionnaireOnlyFindings.find(
         (item) => item.id === findingId,
       )
       if (questionnaireOnlyFinding) {
@@ -1548,12 +1550,83 @@ function App() {
     setScreen('questionnaire')
   }
 
+  useEffect(() => {
+    if (!tenableCredentials) return
+    setDataLoading(true)
+    setDataError(null)
+    setClientData(null)
+    Promise.all([
+      getAssets(tenableCredentials, { limit: 5000 }).catch((err: unknown) => {
+        console.error('[tenable] getAssets failed:', err)
+        return undefined
+      }),
+      getScans(tenableCredentials).catch((err: unknown) => {
+        console.error('[tenable] getScans failed:', err)
+        return undefined
+      }),
+    ])
+      .then(([assetsResponse, scansResponse]) => {
+        if (!assetsResponse) {
+          setDataError(
+            'No se pudieron obtener los assets de Tenable. Verifica que las credenciales tengan permisos de lectura sobre assets (can-view:assets). Revisa la consola del navegador para más detalles.',
+          )
+          return
+        }
+        setClientData(
+          transformTenableData({
+            assets: assetsResponse,
+            scans: scansResponse,
+          }),
+        )
+      })
+      .catch((err: unknown) => {
+        console.error('[tenable] unexpected error during load:', err)
+        setDataError(err instanceof Error ? err.message : 'No se pudieron obtener los datos de Tenable.')
+      })
+      .finally(() => setDataLoading(false))
+  }, [tenableCredentials])
+
   if (tenableCredentials === null) {
     return <TenableConnect onConnect={(creds) => setTenableCredentials(creds)} />
   }
 
-  // TODO: remove — temporary connection test
-  return <TenableTest credentials={tenableCredentials} />
+  if (dataLoading) {
+    return (
+      <div className="flex min-h-screen flex-col items-center justify-center gap-4" style={{ backgroundColor: '#0D1E2E' }}>
+        <svg className="h-8 w-8 animate-spin" viewBox="0 0 24 24" fill="none" style={{ color: '#2E75B6' }}>
+          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+        </svg>
+        <p className="text-sm" style={{ color: '#7B9DBF' }}>Obteniendo datos de Tenable…</p>
+      </div>
+    )
+  }
+
+  if (dataError || !clientData) {
+    return (
+      <div className="flex min-h-screen items-center justify-center p-4" style={{ backgroundColor: '#0D1E2E' }}>
+        <div className="w-full max-w-md rounded-xl border p-8" style={{ backgroundColor: '#0F2235', borderColor: '#1B3A5C' }}>
+          <div className="mb-4 flex items-center gap-2">
+            <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5 shrink-0" stroke="#F4A0A0" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" />
+            </svg>
+            <span className="text-sm font-semibold" style={{ color: '#F4A0A0' }}>Error al cargar datos</span>
+          </div>
+          <p className="mb-6 text-sm" style={{ color: '#F4A0A0' }}>{dataError ?? 'No se recibieron datos.'}</p>
+          <button
+            type="button"
+            onClick={() => setTenableCredentials(null)}
+            className="w-full rounded-lg py-3 text-sm font-semibold"
+            style={{ backgroundColor: '#2E75B6', color: '#ffffff' }}
+          >
+            Reintentar con otras credenciales
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  const data = clientData
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900">
@@ -1565,7 +1638,7 @@ function App() {
                 Tenable Vulnerability Management HealthCheck
               </h1>
               <div className="mt-1 flex items-center gap-3">
-                <p className="text-[21px] text-slate-600">{meridianData.companyName} (Demo)</p>
+                <p className="text-[21px] text-slate-600">{data.companyName}</p>
                 <div className="flex items-center gap-2">
                   <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                     Overall Maturity
@@ -1732,6 +1805,7 @@ function App() {
       <main className="mx-auto max-w-7xl px-6 py-6">
         {screen === 'dashboard' ? (
           <Dashboard
+            appData={data}
             role={role}
             criticalFindings={criticalFindings}
             onOpenDomain={openDomain}
@@ -1740,6 +1814,7 @@ function App() {
           />
         ) : screen === 'findings' ? (
           <FindingsWorkspace
+            appData={data}
             role={role}
             activeDomainId={activeDomainId}
             activeFindingId={activeFindingId}
@@ -1762,6 +1837,7 @@ function App() {
           />
         ) : screen === 'questionnaire' ? (
           <QuestionnaireScreen
+            appData={data}
             questionnaire={questionnaire}
             onChange={setQuestionnaire}
             onOpenFinding={openFinding}
@@ -1775,6 +1851,7 @@ function App() {
           />
         ) : screen === 'engagement' ? (
           <EngagementOverviewScreen
+            appData={data}
             demoGuide={demoGuide}
             onOpenInterviewGuide={() => setScreen('interview-guide')}
           />
@@ -1805,7 +1882,7 @@ function App() {
             demoGuide={demoGuide}
           />
         ) : screen === 'report' ? (
-          <ReportPreviewScreen role={role} onOpenFinding={openFinding} demoGuide={demoGuide} />
+          <ReportPreviewScreen appData={data} role={role} onOpenFinding={openFinding} demoGuide={demoGuide} />
         ) : (
           <PlaceholderScreen screen={screen} role={role} />
         )}
@@ -1815,19 +1892,21 @@ function App() {
 }
 
 function Dashboard({
+  appData,
   role,
   criticalFindings,
   onOpenDomain,
   onOpenFinding,
   demoGuide,
 }: {
+  appData: DemoData
   role: UserRole
-  criticalFindings: typeof meridianData.findings
+  criticalFindings: Finding[]
   onOpenDomain: (domainId: string) => void
   onOpenFinding: (findingId: string, anchorId?: string) => void
   demoGuide: DemoGuideState
 }) {
-  const domainChartData = meridianData.domainScores.map((domain) => ({
+  const domainChartData = appData.domainScores.map((domain) => ({
     ...domain,
     fill: getScoreColor(domain.score),
   }))
@@ -1847,7 +1926,7 @@ function Dashboard({
     { finding: '6.1 Integration', effort: 83, impact: 88 },
   ]
 
-  const operationalMaturity = meridianData.domainScores.map((d) => ({
+  const operationalMaturity = appData.domainScores.map((d) => ({
     subject: d.name,
     value: d.score,
     fullMark: 5,
@@ -2108,6 +2187,7 @@ function Dashboard({
 }
 
 function FindingsWorkspace({
+  appData,
   role,
   activeDomainId,
   activeFindingId,
@@ -2124,6 +2204,7 @@ function FindingsWorkspace({
   onBackToDomain,
   demoGuide,
 }: {
+  appData: DemoData
   role: UserRole
   activeDomainId: string
   activeFindingId: string | null
@@ -2140,9 +2221,9 @@ function FindingsWorkspace({
   onBackToDomain: () => void
   demoGuide: DemoGuideState
 }) {
-  const domain = meridianData.domainScores.find((item) => item.id === activeDomainId)
+  const domain = appData.domainScores.find((item) => item.id === activeDomainId)
   const finding = activeFindingId
-    ? meridianData.findings.find((item) => item.id === activeFindingId)
+    ? appData.findings.find((item) => item.id === activeFindingId)
     : null
 
   if (!domain) return null
@@ -2152,7 +2233,7 @@ function FindingsWorkspace({
       <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
         <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Domain Selector</p>
         <div className="mt-3 flex flex-wrap gap-2">
-          {meridianData.domainScores.map((item) => (
+          {appData.domainScores.map((item) => (
             <button
               key={item.id}
               type="button"
@@ -2171,6 +2252,7 @@ function FindingsWorkspace({
 
       {finding ? (
         <FindingDetailView
+          appData={appData}
           role={role}
           findingId={finding.id}
           questionnaire={questionnaire}
@@ -2186,22 +2268,24 @@ function FindingsWorkspace({
           demoGuide={demoGuide}
         />
       ) : (
-        <DomainDetailView domainId={domain.id} onOpenFinding={onOpenFinding} />
+        <DomainDetailView appData={appData} domainId={domain.id} onOpenFinding={onOpenFinding} />
       )}
     </div>
   )
 }
 
 function DomainDetailView({
+  appData,
   domainId,
   onOpenFinding,
 }: {
+  appData: DemoData
   domainId: string
   onOpenFinding: (findingId: string) => void
 }) {
-  const domain = meridianData.domainScores.find((item) => item.id === domainId)
-  const findings = meridianData.findings.filter((item) => item.domainId === domainId)
-  const customFindings = meridianData.customFindings.filter((item) => item.domainId === domainId)
+  const domain = appData.domainScores.find((item) => item.id === domainId)
+  const findings = appData.findings.filter((item) => item.domainId === domainId)
+  const customFindings = appData.customFindings.filter((item) => item.domainId === domainId)
   const contextAvailableByFindingId: Record<string, boolean> = {
     '1.1': true,
     '1.2': true,
@@ -2275,8 +2359,8 @@ function DomainDetailView({
                 Organizational Context:{' '}
                 {contextAvailableByFindingId[finding.id] ? 'Available' : 'Not available'}
               </span>
-              {(meridianData.annotations.some((item) => item.findingId === finding.id) ||
-                meridianData.scoreOverride.findingId === finding.id ||
+              {(appData.annotations.some((item) => item.findingId === finding.id) ||
+                appData.scoreOverride.findingId === finding.id ||
                 customFindings.length > 0) && (
                 <span className="rounded border border-green-200 bg-green-50 px-2 py-0.5 text-xs text-green-800">
                   Advanced Analysis: Available
@@ -2291,6 +2375,7 @@ function DomainDetailView({
 }
 
 function FindingDetailView({
+  appData,
   role,
   findingId,
   questionnaire,
@@ -2305,6 +2390,7 @@ function FindingDetailView({
   onBack,
   demoGuide,
 }: {
+  appData: DemoData
   role: UserRole
   findingId: string
   questionnaire: QuestionnaireState
@@ -2319,9 +2405,9 @@ function FindingDetailView({
   onBack: () => void
   demoGuide: DemoGuideState
 }) {
-  const finding = meridianData.findings.find((item) => item.id === findingId)
-  const annotations = meridianData.annotations.filter((item) => item.findingId === findingId)
-  const override = meridianData.scoreOverride.findingId === findingId ? meridianData.scoreOverride : null
+  const finding = appData.findings.find((item) => item.id === findingId)
+  const annotations = appData.annotations.filter((item) => item.findingId === findingId)
+  const override = appData.scoreOverride.findingId === findingId ? appData.scoreOverride : null
 
   const contextLayerMap: Record<
     string,
@@ -2525,7 +2611,7 @@ function FindingDetailView({
   }
 
   const contextLayer = contextLayerMap[finding.id]
-  const relatedCustomFindings = meridianData.customFindings.filter((item) => {
+  const relatedCustomFindings = appData.customFindings.filter((item) => {
     if (item.title === 'Credential Architecture Risk') return finding.id === '2.1'
     if (item.title === 'Executive Sponsorship Gap') return finding.id === '5.1'
     return false
@@ -2940,6 +3026,7 @@ function FindingDetailView({
 }
 
 function QuestionnaireScreen({
+  appData,
   questionnaire,
   onChange,
   onOpenFinding,
@@ -2948,6 +3035,7 @@ function QuestionnaireScreen({
   onConsumePendingQuestionnaireFocus,
   demoGuide,
 }: {
+  appData: DemoData
   questionnaire: QuestionnaireState
   onChange: (next: QuestionnaireState) => void
   onOpenFinding: (findingId: string) => void
@@ -2996,7 +3084,7 @@ function QuestionnaireScreen({
     }
   }
 
-  const questionnaireDomains = meridianData.domainScores
+  const questionnaireDomains = appData.domainScores
 
   useEffect(() => {
     if (!pendingQuestionnaireDomainId) return
@@ -4228,9 +4316,11 @@ function StaticQuestionCard({
 }
 
 function EngagementOverviewScreen({
+  appData,
   demoGuide,
   onOpenInterviewGuide,
 }: {
+  appData: DemoData
   demoGuide: DemoGuideState
   onOpenInterviewGuide: () => void
 }) {
@@ -4275,14 +4365,14 @@ function EngagementOverviewScreen({
             text="The consultant's workspace for managing the engagement. Shows metadata, activity summary, key decisions, delivery timeline, and the Pre-Engagement Briefing that was auto-generated before the consultant met the customer."
           />
           <div className="mt-3 grid gap-3 sm:grid-cols-2">
-            <MetaItem label="Customer" value={meridianData.companyName} />
-            <MetaItem label="Model" value={meridianData.engagement.model} />
-            <MetaItem label="Consultant" value={meridianData.engagement.consultant} />
-            <MetaItem label="Duration" value={meridianData.engagement.duration} />
-            <MetaItem label="Status" value={meridianData.engagement.status} />
+            <MetaItem label="Customer" value={appData.companyName} />
+            <MetaItem label="Model" value={appData.engagement.model} />
+            <MetaItem label="Consultant" value={appData.engagement.consultant} />
+            <MetaItem label="Duration" value={appData.engagement.duration} />
+            <MetaItem label="Status" value={appData.engagement.status} />
             <MetaItem
               label="Interview count"
-              value={`${meridianData.engagement.interviewsConducted.length}`}
+              value={`${appData.engagement.interviewsConducted.length}`}
             />
           </div>
         </div>
@@ -5366,10 +5456,12 @@ function ExpansionOpportunitiesScreen({
 }
 
 function ReportPreviewScreen({
+  appData,
   role,
   onOpenFinding,
   demoGuide,
 }: {
+  appData: DemoData
   role: UserRole
   onOpenFinding: (findingId: string) => void
   demoGuide: DemoGuideState
@@ -5392,8 +5484,8 @@ function ReportPreviewScreen({
     { domain: 'Ecosystem Integration', baseline: 1.5, context: 1.8 },
   ]
   const highestReportScore = Math.max(
-    meridianData.overallScoreBaseline,
-    meridianData.overallScoreWithContext,
+    appData.overallScoreBaseline,
+    appData.overallScoreWithContext,
   )
 
   return (

@@ -82,6 +82,8 @@ async function tenableFetch<T>(
   endpoint: string,
   options: { method?: string; body?: unknown } = {},
 ): Promise<T> {
+  console.log('[tenableFetch] POST →', PROXY_URL)
+  console.log('[tenableFetch] ANON_KEY (first 20):', ANON_KEY ? ANON_KEY.slice(0, 20) + '…' : '(empty/undefined)')
   const response = await fetch(PROXY_URL, {
     method: 'POST',
     headers: {
